@@ -1,4 +1,6 @@
-from src.data_processor import *
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
+from data_processor import *
 
 # Replace inf with NaN, then fill
 for c in feature_cols:
