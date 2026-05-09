@@ -1,3 +1,11 @@
+'''
+if you want to run all the code,
+go to main.py and run the whole code'''
+'''
+'''
+
+
+
 import matplotlib
 matplotlib.use('Agg')
 import pandas as pd

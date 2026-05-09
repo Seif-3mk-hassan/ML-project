@@ -23,6 +23,7 @@ from sklearn.model_selection import train_test_split, KFold
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import MinMaxScaler
+from scipy.stats import pearsonr, kendalltau
 
 print("[1.13] Feature selection (strong reduction, train-only)...")
 
@@ -81,6 +82,83 @@ X_test_fs = X_test_fs.drop(columns=drop_corr, errors="ignore")
 print(f"  Removed highly correlated: {len(drop_corr)}")
 
 # -----------------------------
+# 4.5) Pearson & Kendall tau filter (TRAIN only)
+#       Keep features with significant linear OR monotonic
+#       correlation to target
+# -----------------------------
+print("  Computing Pearson & Kendall-tau correlations with target...")
+
+PEARSON_THRESH = 0.02    # minimum |r| to keep
+KENDALL_THRESH = 0.02    # minimum |tau| to keep
+PVALUE_THRESH  = 0.05    # max p-value for either test
+
+pearson_results = {}
+kendall_results = {}
+
+for col in X_train_fs.columns:
+    x_col = X_train_fs[col].values
+    y_col = y_train.values
+
+    # --- Pearson (linear) ---
+    try:
+        p_r, p_pval = pearsonr(x_col, y_col)
+    except Exception:
+        p_r, p_pval = 0.0, 1.0
+    pearson_results[col] = {"r": p_r, "pval": p_pval}
+
+    # --- Kendall tau (monotonic / rank-based) ---
+    try:
+        # Subsample for speed if dataset is large
+        if len(x_col) > 10000:
+            rng = np.random.RandomState(42)
+            idx = rng.choice(len(x_col), size=10000, replace=False)
+            k_tau, k_pval = kendalltau(x_col[idx], y_col[idx])
+        else:
+            k_tau, k_pval = kendalltau(x_col, y_col)
+    except Exception:
+        k_tau, k_pval = 0.0, 1.0
+    kendall_results[col] = {"tau": k_tau, "pval": k_pval}
+
+pearson_df = pd.DataFrame(pearson_results).T.rename(
+    columns={"r": "pearson_r", "pval": "pearson_pval"}
+)
+kendall_df = pd.DataFrame(kendall_results).T.rename(
+    columns={"tau": "kendall_tau", "pval": "kendall_pval"}
+)
+corr_stats = pearson_df.join(kendall_df)
+
+# A feature passes if EITHER Pearson or Kendall is significant & above threshold
+pass_pearson = (
+    (corr_stats["pearson_r"].abs() >= PEARSON_THRESH) &
+    (corr_stats["pearson_pval"] <= PVALUE_THRESH)
+)
+pass_kendall = (
+    (corr_stats["kendall_tau"].abs() >= KENDALL_THRESH) &
+    (corr_stats["kendall_pval"] <= PVALUE_THRESH)
+)
+keep_corr_filter = corr_stats[pass_pearson | pass_kendall].index.tolist()
+drop_corr_filter = [c for c in X_train_fs.columns if c not in keep_corr_filter]
+
+X_train_fs = X_train_fs[keep_corr_filter]
+X_test_fs = X_test_fs[keep_corr_filter]
+
+print(f"  Removed by Pearson/Kendall filter: {len(drop_corr_filter)}")
+print(f"  Remaining after correlation filter: {len(keep_corr_filter)}")
+
+# Print top features by each metric
+top_pearson = corr_stats.loc[keep_corr_filter].reindex(
+    corr_stats.loc[keep_corr_filter, "pearson_r"].abs().sort_values(ascending=False).index
+)
+top_kendall = corr_stats.loc[keep_corr_filter].reindex(
+    corr_stats.loc[keep_corr_filter, "kendall_tau"].abs().sort_values(ascending=False).index
+)
+print("\n  Top 10 by |Pearson r|:")
+print(top_pearson[["pearson_r", "pearson_pval"]].head(10).to_string(float_format="%.4f"))
+print("\n  Top 10 by |Kendall tau|:")
+print(top_kendall[["kendall_tau", "kendall_pval"]].head(10).to_string(float_format="%.4f"))
+print()
+
+# -----------------------------
 # 5) CV stability importance (RandomForest)
 #    Keep features that are useful in many folds
 # -----------------------------
@@ -121,6 +199,14 @@ X_test_fs = X_test_fs[selected_features]
 feature_cols = selected_features  # update for downstream code
 
 print(f"  Final selected features: {len(feature_cols)}")
+
+# --- Print final Pearson & Kendall stats for selected features ---
+print("\n  Final feature correlation summary:")
+final_stats = corr_stats.loc[feature_cols, ["pearson_r", "kendall_tau"]].copy()
+final_stats["rf_importance"] = mean_imp[feature_cols].values
+final_stats = final_stats.sort_values("rf_importance", ascending=False)
+print(final_stats.to_string(float_format="%.4f"))
+print()
 
 # -----------------------------
 # 6) Normalize AFTER selection (fit on TRAIN only)

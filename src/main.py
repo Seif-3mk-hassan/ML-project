@@ -1,8 +1,72 @@
 from hyper_parameter_tuning import *
 import seaborn as sns
+import joblib
+import json
+import re
 import os
 
 os.makedirs('visuales', exist_ok=True)
+
+
+def _sanitize_name(name):
+    return re.sub(r'[^A-Za-z0-9_-]+', '_', name).strip('_')
+
+
+def _save_best_model(name):
+    os.makedirs('models', exist_ok=True)
+
+    model_map = {
+        'Linear Regression': lr,
+        'Random Forest': rf,
+        'XGBoost': xgb_model,
+        'LightGBM': lgb_model,
+        'Stacking Ensemble': stack,
+        'Tuned XGBoost': tuned_xgb,
+    }
+
+    if name in model_map:
+        model_path = os.path.join('models', f"best_model_{_sanitize_name(name)}.joblib")
+        joblib.dump(model_map[name], model_path)
+        print(f"  Saved best model object to: {model_path}")
+        return model_path
+
+    blend_data = None
+    if name == 'ACC-Optimized Blend':
+        blend_data = {
+            'type': 'blend',
+            'method': 'ACC-Optimized Blend',
+            'weights': {
+                'rf': best_w[0],
+                'xgb': best_w[1],
+                'lgb': best_w[2],
+                'stack': best_w[3],
+            }
+        }
+    elif name == 'ACC Blend + Threshold Snap':
+        blend_data = {
+            'type': 'blend',
+            'method': 'ACC Blend + Threshold Snap',
+            'weights': {
+                'rf': best_w[0],
+                'xgb': best_w[1],
+                'lgb': best_w[2],
+                'stack': best_w[3],
+            },
+            'threshold_snap_delta': snap_best_delta,
+        }
+
+    if blend_data is not None:
+        blend_path = os.path.join('models', f"best_model_{_sanitize_name(name)}.json")
+        with open(blend_path, 'w', encoding='utf-8') as fp:
+            json.dump(blend_data, fp, indent=2)
+        print(f"  Saved best blend metadata to: {blend_path}")
+        return blend_path
+
+    print("  Best model could not be serialized automatically.")
+    return None
+
+
+os.makedirs('models', exist_ok=True)
 
 # ===========================================================
 # PART 4: RESULTS & COMPREHENSIVE MODEL COMPARISON
@@ -22,6 +86,9 @@ improvement = ((best_r2 - v3_r2) / v3_r2) * 100
 print(f"\n  v3 best R2 (XGBoost):  {v3_r2:.5f}")
 print(f"  v5 best R2 ({best_name}): {best_r2:.5f}")
 print(f"  Improvement: {improvement:+.1f}%")
+
+# Save best model or blend metadata for later reuse
+_save_best_model(best_name)
 
 # -----------------------------------------------------------
 # 1. Model Comparison Chart (Bar) - All metrics side by side
@@ -272,8 +339,8 @@ print(f"""
   Models Trained:
     1. Linear Regression (baseline)
     2. Random Forest (n_estimators=500, max_depth=25)
-    3. XGBoost (n_estimators=700, max_depth=10)
-    4. LightGBM (n_estimators=700, max_depth=12)
+    3. XGBoost (n_estimators=837, max_depth=7)
+    4. LightGBM (n_estimators=536, max_depth=10)
     5. Stacking Ensemble (RF+XGB+LGB, Ridge meta)
     6. ACC@10-Optimized Blend (weighted ensemble)
     7. Tuned XGBoost (RandomizedSearchCV)
